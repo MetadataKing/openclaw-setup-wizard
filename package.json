@@ -1,7 +1,7 @@
 {
   "name": "openclaw-setup-wizard",
-  "version": "1.0.2",
-  "description": "Fully automated OpenClaw setup. Detects GPU, picks models, writes config, pulls models, launches gateway. Zero questions.",
+  "version": "1.2.0",
+  "description": "Fully automated OpenClaw setup. Detects GPU, picks models, writes config, pulls models, launches gateway. Zero questions. Never breaks existing setups.",
   "type": "module",
   "bin": {
     "openclaw-setup": "./src/index.js"

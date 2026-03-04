@@ -1,59 +1,60 @@
 #!/usr/bin/env node
 
 /**
- * OpenClaw Setup Wizard v1.0.2
- * Fully automated. Zero questions. Detects, configures, installs, launches.
+ * OpenClaw Setup Wizard v1.2.0
+ * Fully automated. Zero questions. Never breaks existing setups.
  *
  * npx openclaw-setup-wizard                    # Auto everything
  * npx openclaw-setup-wizard --telegram TOKEN   # Auto + Telegram
  * npx openclaw-setup-wizard --discord TOKEN    # Auto + Discord
  * npx openclaw-setup-wizard --model qwen3:8b   # Override model
  * npx openclaw-setup-wizard --no-launch        # Setup only
+ * npx openclaw-setup-wizard --fresh            # Ignore existing config
  */
 
-import { writeFile, mkdir, copyFile } from 'fs/promises';
+import { readFile, writeFile, mkdir, copyFile } from 'fs/promises';
 import { execSync, spawn } from 'child_process';
 import { homedir, platform, totalmem } from 'os';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
-const IS_WIN = platform() === 'win32';
-const HOME = homedir();
-const CONFIG_DIR = join(HOME, '.openclaw');
-const CONFIG_PATH = join(CONFIG_DIR, 'openclaw.json');
-const args = process.argv.slice(2);
+var IS_WIN = platform() === 'win32';
+var HOME = homedir();
+var CONFIG_DIR = join(HOME, '.openclaw');
+var CONFIG_PATH = join(CONFIG_DIR, 'openclaw.json');
+var args = process.argv.slice(2);
 
-const c = {
-  red: s => `\x1b[31m${s}\x1b[0m`,
-  green: s => `\x1b[32m${s}\x1b[0m`,
-  yellow: s => `\x1b[33m${s}\x1b[0m`,
-  cyan: s => `\x1b[36m${s}\x1b[0m`,
-  bold: s => `\x1b[1m${s}\x1b[0m`,
-  dim: s => `\x1b[2m${s}\x1b[0m`,
+var c = {
+  red: function(s) { return '\x1b[31m' + s + '\x1b[0m'; },
+  green: function(s) { return '\x1b[32m' + s + '\x1b[0m'; },
+  yellow: function(s) { return '\x1b[33m' + s + '\x1b[0m'; },
+  cyan: function(s) { return '\x1b[36m' + s + '\x1b[0m'; },
+  bold: function(s) { return '\x1b[1m' + s + '\x1b[0m'; },
+  dim: function(s) { return '\x1b[2m' + s + '\x1b[0m'; },
 };
 
 function run(cmd) {
   try { return execSync(cmd, { encoding: 'utf8', timeout: 30000, stdio: 'pipe' }).trim(); }
-  catch { return null; }
+  catch(e) { return null; }
 }
 
 function getArg(flag) {
-  const idx = args.indexOf(flag);
+  var idx = args.indexOf(flag);
   return idx !== -1 && args[idx + 1] ? args[idx + 1] : null;
 }
 
 function hasFlag(flag) { return args.includes(flag); }
 
 function generateToken() {
-  return Array.from({ length: 32 }, () => Math.random().toString(36)[2]).join('');
+  return Array.from({ length: 32 }, function() { return Math.random().toString(36)[2]; }).join('');
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
 function detectGPU() {
   var smi = run('nvidia-smi --query-gpu=name,memory.total --format=csv,noheader,nounits');
   if (smi) {
-    var parts = smi.split('\n')[0].split(',').map(s => s.trim());
+    var parts = smi.split('\n')[0].split(',').map(function(s) { return s.trim(); });
     return { name: parts[0], vram: parseInt(parts[1]), type: 'nvidia' };
   }
   if (platform() === 'darwin') {
@@ -99,12 +100,10 @@ function pickBestModels(vramMB, installedIds) {
     .filter(function(m) { return m.vram <= vramMB * 0.85; })
     .sort(function(a, b) { return b.priority - a.priority; });
   if (fits.length === 0) return { models: [MODELS[0]], fromInstalled: false };
-  var primary2 = fits.find(function(m) { return m.tools; }) || fits[0];
-  var remaining = vramMB - primary2.vram;
-  var secondary2 = fits.find(function(m) {
-    return m.id !== primary2.id && m.id.includes('deepseek') && m.vram <= remaining;
-  });
-  return { models: secondary2 ? [primary2, secondary2] : [primary2], fromInstalled: false };
+  var p = fits.find(function(m) { return m.tools; }) || fits[0];
+  var rem = vramMB - p.vram;
+  var s = fits.find(function(m) { return m.id !== p.id && m.id.includes('deepseek') && m.vram <= rem; });
+  return { models: s ? [p, s] : [p], fromInstalled: false };
 }
 
 function getInstalledModels() {
@@ -123,13 +122,32 @@ async function waitForOllama(maxSeconds) {
   return false;
 }
 
+async function loadExistingConfig() {
+  try {
+    var raw = await readFile(CONFIG_PATH, 'utf8');
+    return JSON.parse(raw);
+  } catch(e) {
+    return null;
+  }
+}
+
 async function main() {
-  console.log(c.bold('\n  🦞 ' + c.cyan('OpenClaw Setup Wizard') + ' v1.0.2'));
+  console.log(c.bold('\n  🦞 ' + c.cyan('OpenClaw Setup Wizard') + ' v1.2.0'));
   console.log(c.dim('  Fully automated — sit back and watch.\n'));
   var startTime = Date.now();
+  var isFresh = hasFlag('--fresh');
+
+  // ─── Load Existing Config ───
+  var existing = null;
+  if (!isFresh) {
+    existing = await loadExistingConfig();
+    if (existing) {
+      console.log('  ' + c.green('✓') + ' Found existing config — will preserve your settings');
+    }
+  }
 
   // ─── Hardware ───
-  console.log(c.bold('  ━━━ Hardware ━━━'));
+  console.log(c.bold('\n  ━━━ Hardware ━━━'));
   var gpu = detectGPU();
   var ramGB = Math.round(totalmem() / 1024 / 1024 / 1024);
   var vram = gpu ? gpu.vram : 0;
@@ -197,26 +215,57 @@ async function main() {
 
   var overrideModel = getArg('--model');
   var selectedModels, primaryModel, needsPull;
-  if (overrideModel) {
-    selectedModels = [{ id: overrideModel }];
-    primaryModel = overrideModel;
-    needsPull = !installed.some(function(m) { return m.includes(overrideModel); });
-    console.log('  ' + c.green('✓') + ' Override: ' + c.bold(primaryModel));
-  } else {
-    var pick = pickBestModels(vram, installed);
-    selectedModels = pick.models;
-    primaryModel = selectedModels[0].id;
-    needsPull = !pick.fromInstalled;
-    if (pick.fromInstalled) {
-      console.log('  ' + c.green('✓') + ' Using installed:');
-    } else {
-      console.log('  ' + c.green('✓') + ' Best for ' + (vram > 0 ? (vram / 1024).toFixed(0) + 'GB' : 'CPU') + ':');
+
+  // If existing config has models, keep them unless --fresh or --model
+  if (existing && !isFresh && !overrideModel) {
+    try {
+      var existingProviders = existing.models.providers;
+      var providerName = Object.keys(existingProviders)[0];
+      var existingModels = existingProviders[providerName].models;
+      var existingPrimary = existing.agents.defaults.model.primary;
+      if (existingModels && existingModels.length > 0) {
+        selectedModels = existingModels.map(function(m) { return { id: m.id }; });
+        primaryModel = existingPrimary.replace(/^[^/]+\//, '');
+        needsPull = false;
+        console.log('  ' + c.green('✓') + ' Keeping existing model config:');
+        selectedModels.forEach(function(m, i) {
+          var isPrimary = m.id === primaryModel;
+          console.log('    ' + (isPrimary ? c.cyan('★') : c.dim('·')) + ' ' + c.bold(m.id) + (isPrimary ? ' ' + c.cyan('(primary)') : ''));
+        });
+        // Check if they're actually installed
+        selectedModels.forEach(function(m) {
+          var have = installed.some(function(inst) { return inst.includes(m.id); });
+          if (!have) needsPull = true;
+        });
+      }
+    } catch(e) {
+      existing = null; // Existing config is broken, start fresh
     }
-    selectedModels.forEach(function(m, i) {
-      var icon = i === 0 ? c.cyan('★') : c.dim('·');
-      var label = i === 0 ? c.cyan('(primary)') : c.dim('(secondary)');
-      console.log('    ' + icon + ' ' + c.bold(m.id) + ' ' + label);
-    });
+  }
+
+  // If no models from existing config, pick new ones
+  if (!selectedModels) {
+    if (overrideModel) {
+      selectedModels = [{ id: overrideModel }];
+      primaryModel = overrideModel;
+      needsPull = !installed.some(function(m) { return m.includes(overrideModel); });
+      console.log('  ' + c.green('✓') + ' Override: ' + c.bold(primaryModel));
+    } else {
+      var pick = pickBestModels(vram, installed);
+      selectedModels = pick.models;
+      primaryModel = selectedModels[0].id;
+      needsPull = !pick.fromInstalled;
+      if (pick.fromInstalled) {
+        console.log('  ' + c.green('✓') + ' Using installed:');
+      } else {
+        console.log('  ' + c.green('✓') + ' Best for ' + (vram > 0 ? (vram / 1024).toFixed(0) + 'GB' : 'CPU') + ':');
+      }
+      selectedModels.forEach(function(m, i) {
+        var icon = i === 0 ? c.cyan('★') : c.dim('·');
+        var label = i === 0 ? c.cyan('(primary)') : c.dim('(secondary)');
+        console.log('    ' + icon + ' ' + c.bold(m.id) + ' ' + label);
+      });
+    }
   }
 
   // ─── Pull (only if needed) ───
@@ -246,9 +295,26 @@ async function main() {
     console.log('\n  ' + c.green('✓') + ' All models installed — skipping pull');
   }
 
-  // ─── Config ───
+  // ─── Configuration ───
   console.log('\n' + c.bold('  ━━━ Configuration ━━━'));
-  var gatewayToken = generateToken();
+
+  // Preserve existing gateway token — NEVER overwrite a working token
+  var gatewayToken;
+  if (existing && existing.gateway && existing.gateway.auth && existing.gateway.auth.token) {
+    gatewayToken = existing.gateway.auth.token;
+    console.log('  ' + c.green('✓') + ' Preserved existing gateway token');
+  } else {
+    gatewayToken = generateToken();
+    console.log('  ' + c.green('✓') + ' Generated new gateway token');
+  }
+
+  // Preserve existing gateway port
+  var gatewayPort = 18789;
+  if (existing && existing.gateway && existing.gateway.port) {
+    gatewayPort = existing.gateway.port;
+  }
+
+  // Build config — merge with existing
   var config = {
     models: {
       providers: {
@@ -268,14 +334,52 @@ async function main() {
     tools: { deny: ['browser'] },
     gateway: {
       mode: 'local',
-      port: 18789,
+      port: gatewayPort,
       auth: { token: gatewayToken },
     },
   };
 
+  // Preserve existing channels
+  if (existing && existing.channels) {
+    config.channels = existing.channels;
+    console.log('  ' + c.green('✓') + ' Preserved existing channel config');
+  }
+
+  // Preserve existing tools config
+  if (existing && existing.tools) {
+    config.tools = existing.tools;
+  }
+
+  // Preserve existing sandbox mode
+  if (existing && existing.agents && existing.agents.defaults && existing.agents.defaults.sandbox) {
+    config.agents.defaults.sandbox = existing.agents.defaults.sandbox;
+  }
+
+  // Preserve any extra providers
+  if (existing && existing.models && existing.models.providers) {
+    var existingKeys = Object.keys(existing.models.providers);
+    existingKeys.forEach(function(key) {
+      if (key !== 'ollama') {
+        config.models.providers[key] = existing.models.providers[key];
+        console.log('  ' + c.green('✓') + ' Preserved provider: ' + key);
+      }
+    });
+  }
+
+  // Preserve any extra top-level keys
+  if (existing) {
+    Object.keys(existing).forEach(function(key) {
+      if (!config[key]) {
+        config[key] = existing[key];
+      }
+    });
+  }
+
+  // Override channels from CLI flags
   var telegramToken = getArg('--telegram');
   if (telegramToken) {
-    config.channels = { telegram: { botToken: telegramToken, dmPolicy: 'pairing' } };
+    if (!config.channels) config.channels = {};
+    config.channels.telegram = { botToken: telegramToken, dmPolicy: 'pairing' };
     try {
       var tgUrl = 'https://api.telegram.org/bot' + telegramToken + '/getMe';
       var check = run('curl -s "' + tgUrl + '"');
@@ -292,6 +396,12 @@ async function main() {
     console.log('  ' + c.green('✓') + ' Discord configured');
   }
 
+  // Ensure baseUrl has no /v1 suffix for native ollama
+  if (config.models.providers.ollama && config.models.providers.ollama.api === 'ollama') {
+    config.models.providers.ollama.baseUrl = config.models.providers.ollama.baseUrl.replace(/\/v1\/?$/, '');
+  }
+
+  // Write config
   await mkdir(CONFIG_DIR, { recursive: true });
   if (existsSync(CONFIG_PATH)) {
     var ts = new Date().toISOString().replace(/[:.]/g, '-');
@@ -300,8 +410,48 @@ async function main() {
   }
   await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2));
   console.log('  ' + c.green('✓') + ' Saved: ' + c.dim(CONFIG_PATH));
-  console.log('  ' + c.green('✓') + ' Gateway: ' + c.cyan('local') + ' mode, port ' + c.cyan('18789'));
-  console.log('  ' + c.green('✓') + ' Token: ' + c.dim(gatewayToken.slice(0, 8) + '...'));
+  console.log('  ' + c.green('✓') + ' Gateway: ' + c.cyan('local') + ' mode, port ' + c.cyan(String(gatewayPort)));
+  console.log('  ' + c.green('✓') + ' Token: ' + c.dim(gatewayToken.slice(0, 8) + '...') + (existing ? ' (preserved)' : ' (new)'));
+
+  // ─── Auth Profiles ───
+  // OpenClaw requires auth-profiles.json even for Ollama (which needs no real key)
+  var agentDirs = [
+    join(CONFIG_DIR, 'agents', 'main', 'agent'),
+    join(CONFIG_DIR, 'agents', 'ollama', 'agent'),
+  ];
+  var authContent = JSON.stringify({ ollama: { apiKey: 'ollama' } });
+  for (var ai = 0; ai < agentDirs.length; ai++) {
+    var authDir = agentDirs[ai];
+    var authFile = join(authDir, 'auth-profiles.json');
+    try {
+      await mkdir(authDir, { recursive: true });
+      // Only write if missing — never overwrite user's real keys
+      if (!existsSync(authFile)) {
+        await writeFile(authFile, authContent);
+        console.log('  ' + c.green('✓') + ' Created auth profile: ' + c.dim(authFile));
+      } else {
+        console.log('  ' + c.green('✓') + ' Auth profile exists: ' + c.dim(authDir.split('agents')[1]));
+      }
+    } catch(e) {}
+  }
+
+  // ─── Clear Stale Device Tokens ───
+  var devicesDir = join(CONFIG_DIR, 'devices');
+  if (existsSync(devicesDir)) {
+    try {
+      var deviceFiles = execSync(IS_WIN
+        ? 'dir /b "' + devicesDir + '" 2>nul'
+        : 'ls "' + devicesDir + '" 2>/dev/null',
+        { encoding: 'utf8', stdio: 'pipe' }).trim();
+      if (deviceFiles) {
+        execSync(IS_WIN
+          ? 'del /q "' + devicesDir + '\\*" 2>nul'
+          : 'rm -f "' + devicesDir + '"/* 2>/dev/null',
+          { stdio: 'pipe' });
+        console.log('  ' + c.green('✓') + ' Cleared stale device tokens');
+      }
+    } catch(e) {}
+  }
 
   // ─── Warm Up ───
   console.log('\n' + c.bold('  ━━━ Loading Model ━━━'));
@@ -315,7 +465,7 @@ async function main() {
 
   // ─── Kill Old Gateways ───
   if (IS_WIN) {
-    var portCheck = run('netstat -ano | findstr 18789');
+    var portCheck = run('netstat -ano | findstr ' + gatewayPort);
     if (portCheck) {
       var lines = portCheck.split('\n').filter(function(l) { return l.includes('LISTENING'); });
       var pids = [];
@@ -327,12 +477,12 @@ async function main() {
         console.log('\n' + c.bold('  ━━━ Cleanup ━━━'));
         pids.forEach(function(pid) {
           run('taskkill /PID ' + pid + ' /F');
-          console.log('  ' + c.green('✓') + ' Killed old PID ' + pid);
+          console.log('  ' + c.green('✓') + ' Killed old gateway PID ' + pid);
         });
       }
     }
   } else {
-    var pidList = run('lsof -ti:18789');
+    var pidList = run('lsof -ti:' + gatewayPort);
     if (pidList) {
       console.log('\n' + c.bold('  ━━━ Cleanup ━━━'));
       pidList.split('\n').forEach(function(p) {
@@ -351,6 +501,7 @@ async function main() {
   if (!ranDiag) {
     var localPaths = [
       join('D:', 'MetadataKingdom', 'openclaw-doctor-pro', 'src', 'index.js'),
+      join(HOME, 'MetadataKingdom', 'openclaw-doctor-pro', 'src', 'index.js'),
       join(HOME, 'openclaw-doctor-pro', 'src', 'index.js'),
     ];
     for (var pi = 0; pi < localPaths.length; pi++) {
@@ -374,9 +525,9 @@ async function main() {
   console.log(c.bold('  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━') + '\n');
   console.log('  GPU:     ' + (gpu ? c.cyan(gpu.name) : c.yellow('CPU')));
   console.log('  Model:   ' + c.cyan(primaryModel));
-  console.log('  Gateway: ' + c.cyan('http://127.0.0.1:18789'));
-  if (telegramToken) console.log('  Chat:    ' + c.cyan('Telegram'));
-  if (discordToken) console.log('  Chat:    ' + c.cyan('Discord'));
+  console.log('  Gateway: ' + c.cyan('http://127.0.0.1:' + gatewayPort));
+  if (config.channels && config.channels.telegram) console.log('  Chat:    ' + c.cyan('Telegram'));
+  if (config.channels && config.channels.discord) console.log('  Chat:    ' + c.cyan('Discord'));
   console.log('');
 
   if (hasFlag('--no-launch')) {
