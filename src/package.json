@@ -1,0 +1,19 @@
+{
+  "name": "openclaw-setup-wizard",
+  "version": "1.0.2",
+  "description": "Fully automated OpenClaw setup. Detects GPU, picks models, writes config, pulls models, launches gateway. Zero questions.",
+  "type": "module",
+  "bin": {
+    "openclaw-setup": "./src/index.js"
+  },
+  "keywords": ["openclaw", "setup", "wizard", "ollama", "local-llm", "gpu", "auto-install"],
+  "author": "MetadataKing",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MetadataKing/openclaw-setup-wizard"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
